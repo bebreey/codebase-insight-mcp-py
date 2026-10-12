@@ -146,7 +146,21 @@ async def run(target: Path) -> int:
     return 0
 
 
+def force_utf8_stdout() -> None:
+    """Make printing repository content safe on a non-UTF-8 console.
+
+    A repository can contain any Unicode — Chinese comments and markers are
+    ordinary — and the default Windows code page cannot encode all of it. Without
+    this the demo dies with ``UnicodeEncodeError`` instead of showing anything,
+    which is exactly what happened on the first Windows CI run.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    force_utf8_stdout()
     target = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else REPO_ROOT
     return asyncio.run(run(target))
 

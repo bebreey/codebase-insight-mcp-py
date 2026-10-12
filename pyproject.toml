@@ -58,6 +58,12 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["codebase_insight"]
 
+[tool.ruff.lint.per-file-ignores]
+# Test data is deliberately international — this project analyses repositories
+# that contain CJK text — so full-width punctuation there is correct, not
+# ambiguous.
+"tests/**" = ["RUF001"]
+
 [tool.mypy]
 python_version = "3.11"
 files = ["src/codebase_insight"]

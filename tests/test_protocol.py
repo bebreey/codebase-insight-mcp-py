@@ -17,7 +17,8 @@ import queue
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -83,10 +84,11 @@ class StdioClient:
         self._next_id += 1
         self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}})
 
+        deadline = time.monotonic() + RESPONSE_TIMEOUT_SECONDS
         while True:
             try:
-                raw = self.lines.get(timeout=RESPONSE_TIMEOUT_SECONDS)
-            except queue.Empty:  # pragma: no cover - only on a hung server
+                raw = self.lines.get(timeout=max(0.1, deadline - time.monotonic()))
+            except queue.Empty:
                 self.close()
                 raise AssertionError(
                     f"timed out after {RESPONSE_TIMEOUT_SECONDS}s waiting for {method}; "
@@ -95,6 +97,13 @@ class StdioClient:
             message = json.loads(raw)
             if message.get("id") == request_id:
                 return message
+            if self.proc.poll() is not None and self.lines.empty():
+                # The child died without answering: report it instead of hanging.
+                self.close()
+                raise AssertionError(
+                    f"the server exited (code {self.proc.returncode}) while answering {method}; "
+                    f"stderr: {self.stderr[-8:]}"
+                )
 
     def initialize(self) -> dict[str, Any]:
         response = self.request(
@@ -213,3 +222,61 @@ def test_cli_flags_work_without_starting_a_session(flag: str) -> None:
     if flag == "--list-tools":
         for name in TOOL_NAMES:
             assert name in completed.stdout
+
+
+NON_ASCII_REPO = {
+    "src/module.py": (
+        '"""中文模块文档。"""\n\n'
+        "VALUE = 1\n\n\n"
+        "# TODO: 这里需要重构 —— 先把依赖拆开\n"
+        "class 计算器:\n"
+        "    def 相加(self, a, b):\n"
+        "        return a + b\n"
+    ),
+    "docs/笔记.md": "# 中文笔记\n\n- [ ] TODO：补测试\n",
+}
+
+
+def test_non_ascii_content_crosses_the_wire(
+    client: StdioClient, temp_tree: Callable[[dict[str, str]], Path]
+) -> None:
+    """A codebase full of Chinese comments must survive the JSON-RPC channel."""
+    root = temp_tree(NON_ASCII_REPO)
+    client.initialize()
+
+    result = client.call_tool("find_todos", {"path": str(root)})
+
+    assert result.get("isError") is not True, result
+    assert result["structuredContent"]["total"] == 2
+    assert "重构" in result["content"][0]["text"]
+
+    symbols = client.call_tool("search_symbols", {"path": str(root), "languages": ["Python"]})
+    items = {row["name"]: row["kind"] for row in symbols["structuredContent"]["items"]}
+    # Non-ASCII identifiers are extracted like any other: the ast module does
+    # not care what the letters are.
+    assert items["计算器"] == "class"
+    assert items["相加"] == "method"
+    assert items["VALUE"] == "constant"
+
+
+def test_non_ascii_content_survives_a_non_utf8_stdout(temp_tree: Callable[[dict[str, str]], Path]) -> None:
+    """Regression: the default Windows console code page cannot encode CJK at all.
+
+    ``PYTHONIOENCODING=cp1252`` reproduces that condition on any platform, so the
+    server has to write UTF-8 regardless of what the environment asks for.
+    """
+    root = temp_tree(NON_ASCII_REPO)
+
+    client = StdioClient(env={"PYTHONIOENCODING": "cp1252"})
+    try:
+        client.initialize()
+
+        result = client.call_tool("find_todos", {"path": str(root)})
+        assert result.get("isError") is not True, result
+        assert result["structuredContent"]["total"] == 2
+        assert client.violations == []
+
+        # The session must still work afterwards.
+        assert client.call_tool("repo_overview", {"path": str(root)}).get("isError") is not True
+    finally:
+        client.close()
