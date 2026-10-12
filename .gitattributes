@@ -1,0 +1,11 @@
+# Normalise line endings across platforms.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
+# Keep test fixtures out of language statistics on GitHub.
+tests/fixtures/** linguist-vendored

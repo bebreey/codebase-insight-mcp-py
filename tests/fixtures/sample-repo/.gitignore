@@ -1,0 +1,14 @@
+# Fixture ignore rules.
+#
+# `src/sample/generated/` and `*.log` are listed here so the walker has
+# something real to exclude: the test suite asserts that files under an ignored
+# path never appear in the analysis.
+
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.log
+
+src/sample/generated/
